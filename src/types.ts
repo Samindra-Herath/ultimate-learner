@@ -51,10 +51,23 @@ export interface StudyProgress {
   examAttempts: ExamAttempt[];
 }
 
+// --- Folder Organization ---
+
+export const FOLDER_COLORS = ['blue', 'green', 'purple', 'orange', 'red', 'teal'] as const;
+export type FolderColor = typeof FOLDER_COLORS[number];
+
+export interface StudyFolder {
+  id: string;
+  name: string;
+  color: FolderColor;
+  createdAt: string;
+}
+
 export interface StudyGuide {
   id: string;
   title: string;
   createdAt: string;
+  folderId?: string; // Links to StudyFolder.id; undefined = unfiled
   sources: Array<{ id: string; name: string; type: SourceType }>;
   topics: TopicDetails[];
   flashcards: Flashcard[];
@@ -62,3 +75,4 @@ export interface StudyGuide {
   quickSummary: string;
   progress?: StudyProgress; // Added progress history tracking field
 }
+

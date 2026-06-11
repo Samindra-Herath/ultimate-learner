@@ -54,3 +54,11 @@
 .rotate-y-180 {
   transform: rotateY(180deg);
 }
+
+/* Touch devices: always show action buttons (no hover available) */
+@media (hover: none) {
+  .folder-actions,
+  .guide-actions {
+    opacity: 1 !important;
+  }
+}

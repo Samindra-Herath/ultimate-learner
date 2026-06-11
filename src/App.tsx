@@ -1,18 +1,40 @@
 import React, { useState, useEffect } from "react";
 import { Sparkles, Plus, GraduationCap, AlertCircle, BookOpen, Clock, Heart, ArrowLeft, Lightbulb, Sun, Moon } from "lucide-react";
-import { StudyGuide, StudySource, StudyProgress } from "./types";
+import { StudyGuide, StudySource, StudyProgress, StudyFolder, FolderColor, FOLDER_COLORS } from "./types";
 import UploadSection from "./components/UploadSection";
 import StudyNoteViewer from "./components/StudyNoteViewer";
 import HistorySidebar from "./components/HistorySidebar";
 import { generateUUID } from "./utils/uuid";
 
 const STORAGE_KEY = "ultimate_learner_guides";
+const FOLDERS_STORAGE_KEY = "ultimate_learner_folders";
+const MAX_FOLDERS = 20;
+
+/** Safe localStorage writer — catches QuotaExceededError and returns false */
+function safeSave(key: string, value: unknown): boolean {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+    return true;
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "QuotaExceededError") {
+      console.error("localStorage quota exceeded for key:", key);
+    }
+    return false;
+  }
+}
+
+/** Auto-assign next folder color by cycling through the palette */
+function nextAutoColor(folders: StudyFolder[]): FolderColor {
+  return FOLDER_COLORS[folders.length % FOLDER_COLORS.length];
+}
 
 export default function App() {
   const [history, setHistory] = useState<StudyGuide[]>([]);
+  const [folders, setFolders] = useState<StudyFolder[]>([]);
   const [currentGuideId, setCurrentGuideId] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [storageWarning, setStorageWarning] = useState<string | null>(null);
   const [loadingStep, setLoadingStep] = useState(0);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
 
@@ -32,7 +54,7 @@ export default function App() {
     localStorage.setItem("ultimate_study_prep_dark", String(darkMode));
   }, [darkMode]);
 
-  // Load history from localStorage on mount
+  // Load history + folders from localStorage on mount
   useEffect(() => {
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
@@ -82,17 +104,47 @@ export default function App() {
     } catch (e) {
       console.error("Failed to load study history from cache:", e);
     }
+
+    // Load folders
+    try {
+      const storedFolders = localStorage.getItem(FOLDERS_STORAGE_KEY);
+      if (storedFolders) {
+        setFolders(JSON.parse(storedFolders) as StudyFolder[]);
+      }
+    } catch (e) {
+      console.error("Failed to load folders from cache:", e);
+    }
   }, []);
 
-  // Save history to localStorage
+  // Save history to localStorage (with quota error handling)
   const saveHistory = (newHistory: StudyGuide[]) => {
     setHistory(newHistory);
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(newHistory));
-    } catch (e) {
-      console.error("Failed to persist study guides history:", e);
+    if (!safeSave(STORAGE_KEY, newHistory)) {
+      setStorageWarning("Storage full — your changes won't persist after reload. Consider deleting old sessions.");
     }
   };
+
+  // Save folders to localStorage
+  const saveFolders = (newFolders: StudyFolder[]) => {
+    setFolders(newFolders);
+    if (!safeSave(FOLDERS_STORAGE_KEY, newFolders)) {
+      setStorageWarning("Storage full — your changes won't persist after reload. Consider deleting old sessions.");
+    }
+  };
+
+  // Cross-tab sync via storage event
+  useEffect(() => {
+    function onStorageChange(e: StorageEvent) {
+      if (e.key === STORAGE_KEY && e.newValue) {
+        try { setHistory(JSON.parse(e.newValue)); } catch { /* ignore malformed */ }
+      }
+      if (e.key === FOLDERS_STORAGE_KEY && e.newValue) {
+        try { setFolders(JSON.parse(e.newValue)); } catch { /* ignore malformed */ }
+      }
+    }
+    window.addEventListener("storage", onStorageChange);
+    return () => window.removeEventListener("storage", onStorageChange);
+  }, []);
 
   const handleUpdateProgress = (guideId: string, progress: StudyProgress) => {
     const updatedHistory = history.map((g) => {
@@ -231,6 +283,43 @@ export default function App() {
     setErrorMessage(null);
   };
 
+  // --- Folder CRUD Handlers ---
+
+  const handleCreateFolder = (name: string) => {
+    if (folders.length >= MAX_FOLDERS) {
+      setStorageWarning(`Maximum ${MAX_FOLDERS} folders reached. Consider consolidating or using descriptive names.`);
+      return;
+    }
+    const newFolder: StudyFolder = {
+      id: generateUUID(),
+      name,
+      color: nextAutoColor(folders),
+      createdAt: new Date().toISOString(),
+    };
+    saveFolders([...folders, newFolder]);
+  };
+
+  const handleRenameFolder = (id: string, newName: string) => {
+    saveFolders(folders.map(f => f.id === id ? { ...f, name: newName } : f));
+  };
+
+  const handleDeleteFolder = (id: string) => {
+    // 1. Remove the folder
+    saveFolders(folders.filter(f => f.id !== id));
+    // 2. Unfile all guides that belonged to it — immutable map
+    const updatedGuides = history.map(g =>
+      g.folderId === id ? { ...g, folderId: undefined } : g
+    );
+    saveHistory(updatedGuides);
+  };
+
+  const handleMoveGuide = (guideId: string, folderId: string | null) => {
+    const updated = history.map(g =>
+      g.id === guideId ? { ...g, folderId: folderId ?? undefined } : g
+    );
+    saveHistory(updated);
+  };
+
   const activeGuide = history.find((g) => g.id === currentGuideId);
 
   // Loading Steps texts
@@ -345,6 +434,29 @@ export default function App() {
             </div>
           )}
 
+          {/* STORAGE QUOTA WARNING */}
+          {storageWarning && (
+            <div id="storage-warning-banner" className="mb-6 p-4 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/40 rounded-xl flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <h4 className="text-sm font-bold text-amber-800 dark:text-amber-300">
+                  Storage Warning
+                </h4>
+                <p className="text-xs text-amber-700 dark:text-amber-400 leading-relaxed">
+                  {storageWarning}
+                </p>
+                <div className="pt-2">
+                  <button
+                    onClick={() => setStorageWarning(null)}
+                    className="text-xs text-amber-800 dark:text-amber-300 underline font-bold cursor-pointer"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* MAIN PAGE DIVISION */}
           {!currentGuideId ? (
             
@@ -378,6 +490,11 @@ export default function App() {
                   onSelect={handleSelectGuide}
                   onDelete={handleDeleteGuide}
                   onRename={handleRenameGuide}
+                  folders={folders}
+                  onCreateFolder={handleCreateFolder}
+                  onRenameFolder={handleRenameFolder}
+                  onDeleteFolder={handleDeleteFolder}
+                  onMoveGuide={handleMoveGuide}
                 />
 
                 <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
@@ -463,6 +580,11 @@ export default function App() {
                         onSelect={handleSelectGuide}
                         onDelete={handleDeleteGuide}
                         onRename={handleRenameGuide}
+                        folders={folders}
+                        onCreateFolder={handleCreateFolder}
+                        onRenameFolder={handleRenameFolder}
+                        onDeleteFolder={handleDeleteFolder}
+                        onMoveGuide={handleMoveGuide}
                       />
                     </div>
                   )}
