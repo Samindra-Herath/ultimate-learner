@@ -42,14 +42,24 @@ export default async function handler(req: any, res: any) {
 
     sources.forEach((source: any) => {
       if (source.type === "pdf") {
-        // Strip out the data:application/pdf;base64, header if it exists
-        const base64Data = source.content.replace(/^data:application\/pdf;base64,/, "");
-        contents.push({
-          inlineData: {
-            mimeType: "application/pdf",
-            data: base64Data,
-          },
-        });
+        // Check if the content is base64 (starts with data URI header) or extracted text
+        const isBase64 = source.content.startsWith("data:application/pdf;base64,");
+        
+        if (isBase64) {
+          // Scanned/image-only PDF — use multimodal inline data for Gemini OCR
+          const base64Data = source.content.replace(/^data:application\/pdf;base64,/, "");
+          contents.push({
+            inlineData: {
+              mimeType: "application/pdf",
+              data: base64Data,
+            },
+          });
+        } else {
+          // Text-extracted PDF — send as plain text (huge token savings)
+          contents.push({
+            text: `--- PDF SOURCE START: ${source.name} ---\n${source.content}\n--- PDF SOURCE END ---`,
+          });
+        }
       } else {
         contents.push({
           text: `--- SOURCE START: ${source.name} (Type: ${source.type}) ---\n${source.content}\n--- SOURCE END ---`,

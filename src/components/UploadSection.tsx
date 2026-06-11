@@ -1,7 +1,8 @@
 import React, { useState, useRef } from "react";
-import { Upload, FileText, Trash2, BookOpen, Sparkles, Check } from "lucide-react";
+import { Upload, FileText, Trash2, BookOpen, Sparkles, Check, Loader2 } from "lucide-react";
 import { StudySource, SourceType } from "../types";
 import { generateUUID } from "../utils/uuid";
+import { extractTextFromPDF } from "../utils/pdfParser";
 
 interface UploadSectionProps {
   onGenerate: (sources: StudySource[], focusDepth: string, explainStyle: string, flashcardCount: number, quizCount: number) => void;
@@ -18,6 +19,7 @@ export default function UploadSection({ onGenerate, isGenerating }: UploadSectio
   const [quizCount, setQuizCount] = useState(10);
   const [isDragging, setIsDragging] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
+  const [isProcessingFiles, setIsProcessingFiles] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -27,38 +29,71 @@ export default function UploadSection({ onGenerate, isGenerating }: UploadSectio
     }
   };
 
-  const processFiles = (files: FileList) => {
+  const processFiles = async (files: FileList) => {
     setErrorMsg("");
-    Array.from(files).forEach((file) => {
-      const isPDF = file.type === "application/pdf" || file.name.endsWith(".pdf");
-      const isText = file.type === "text/plain" || file.name.endsWith(".txt") || file.name.endsWith(".md");
+    setIsProcessingFiles(true);
 
-      if (!isPDF && !isText) {
-        setErrorMsg("Only PDF (.pdf) and text files (.txt, .md) are currently supported.");
-        return;
-      }
+    try {
+      const fileArray = Array.from(files);
+      for (const file of fileArray) {
+        const isPDF = file.type === "application/pdf" || file.name.endsWith(".pdf");
+        const isText = file.type === "text/plain" || file.name.endsWith(".txt") || file.name.endsWith(".md");
 
-      const reader = new FileReader();
-      
-      if (isPDF) {
-        // Read as Base64 Data URL for Gemini Multimodal processing
-        reader.readAsDataURL(file);
-        reader.onload = () => {
-          const base64Content = reader.result as string;
-          const newSource: StudySource = {
-            id: generateUUID(),
-            name: file.name,
-            type: "pdf",
-            content: base64Content,
-            size: file.size,
-          };
-          setSources((prev) => [...prev, newSource]);
-        };
-      } else {
-        // Read as plain text
-        reader.readAsText(file);
-        reader.onload = () => {
-          const textContent = reader.result as string;
+        if (!isPDF && !isText) {
+          setErrorMsg("Only PDF (.pdf) and text files (.txt, .md) are currently supported.");
+          continue;
+        }
+
+        if (isPDF) {
+          try {
+            // Step 1: Try client-side text extraction (fast, minimal tokens)
+            const arrayBuffer = await file.arrayBuffer();
+            const result = await extractTextFromPDF(arrayBuffer);
+
+            if (result.isTextRich && result.text.length > 50) {
+              // Text-rich PDF → send as plain text (huge token savings)
+              console.log(
+                `[PDF] "${file.name}" — text-rich (${result.avgCharsPerPage.toFixed(0)} chars/page, ${result.pageCount} pages). Using extracted text.`
+              );
+              const newSource: StudySource = {
+                id: generateUUID(),
+                name: file.name,
+                type: "pdf",
+                content: result.text, // Plain text, not base64
+                size: file.size,
+              };
+              setSources((prev) => [...prev, newSource]);
+            } else {
+              // Scanned/image-only PDF → fall back to base64 for Gemini OCR
+              console.log(
+                `[PDF] "${file.name}" — scanned/low-text (${result.avgCharsPerPage.toFixed(0)} chars/page). Falling back to base64 upload.`
+              );
+              const base64Content = await readFileAsDataURL(file);
+              const newSource: StudySource = {
+                id: generateUUID(),
+                name: file.name,
+                type: "pdf",
+                content: base64Content,
+                size: file.size,
+              };
+              setSources((prev) => [...prev, newSource]);
+            }
+          } catch (pdfError) {
+            // PDF.js failed entirely → fall back to base64 silently
+            console.warn(`[PDF] "${file.name}" — extraction failed, using base64 fallback:`, pdfError);
+            const base64Content = await readFileAsDataURL(file);
+            const newSource: StudySource = {
+              id: generateUUID(),
+              name: file.name,
+              type: "pdf",
+              content: base64Content,
+              size: file.size,
+            };
+            setSources((prev) => [...prev, newSource]);
+          }
+        } else {
+          // Plain text file
+          const textContent = await readFileAsText(file);
           const newSource: StudySource = {
             id: generateUUID(),
             name: file.name,
@@ -67,8 +102,30 @@ export default function UploadSection({ onGenerate, isGenerating }: UploadSectio
             size: file.size,
           };
           setSources((prev) => [...prev, newSource]);
-        };
+        }
       }
+    } finally {
+      setIsProcessingFiles(false);
+    }
+  };
+
+  /** Promise wrapper around FileReader.readAsDataURL */
+  const readFileAsDataURL = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+  };
+
+  /** Promise wrapper around FileReader.readAsText */
+  const readFileAsText = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsText(file);
     });
   };
 
@@ -161,6 +218,13 @@ export default function UploadSection({ onGenerate, isGenerating }: UploadSectio
           Supports PDFs & Rich Text (.txt, .md)
         </span>
       </div>
+
+      {isProcessingFiles && (
+        <div id="processing-indicator" className="flex items-center gap-3 p-3 bg-indigo-50 dark:bg-indigo-950/20 text-indigo-700 dark:text-indigo-300 rounded-lg text-sm border border-indigo-100 dark:border-indigo-900/40">
+          <Loader2 className="w-4 h-4 animate-spin" />
+          <span>Extracting text from PDF — this reduces token costs significantly…</span>
+        </div>
+      )}
 
       {errorMsg && (
         <div id="upload-error" className="p-3 bg-red-50 dark:bg-red-950/20 text-red-650 dark:text-red-400 rounded-lg text-sm border border-red-100 dark:border-red-900/40">
@@ -368,7 +432,7 @@ export default function UploadSection({ onGenerate, isGenerating }: UploadSectio
       <button
         id="generate-guide-btn"
         onClick={triggerGenerate}
-        disabled={isGenerating || sources.length === 0}
+        disabled={isGenerating || isProcessingFiles || sources.length === 0}
         className="w-full bg-indigo-600 hover:bg-indigo-700 dark:bg-indigo-600 dark:hover:bg-indigo-700 text-white font-sans font-bold py-3.5 px-6 rounded-xl shadow-sm disabled:bg-slate-200 dark:disabled:bg-slate-800 disabled:text-slate-400 dark:disabled:text-slate-600 disabled:cursor-not-allowed transition-all text-sm flex justify-center items-center gap-2 cursor-pointer hover:shadow"
       >
         {isGenerating ? (
