@@ -1,0 +1,56 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap');
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --font-display: "Space Grotesk", "Inter", sans-serif;
+  
+  /* ChatGPT Inspired Dark Mode Tones */
+  --color-slate-950: #0D0D0D; /* Primary App Background */
+  --color-slate-900: #171717; /* Sidebar / Elevated Header */
+  --color-slate-800: #212121; /* Items / User Bubbles */
+  --color-slate-805: #212121;
+  --color-slate-850: #171717;
+  
+  /* Refined border colors to blend but be visible */
+  --color-slate-700: #303030;
+  
+  /* Text and secondary elements */
+  --color-slate-400: #B4B4B4; /* Muted texts */
+  --color-slate-350: #B4B4B4;
+  --color-slate-300: #D0D0D0;
+  --color-slate-200: #ECECF1; /* Mostly used for bright texts */
+  --color-slate-100: #ECECF1; /* Primary Text */
+  --color-slate-50:  #FFFFFF; /* White */
+  
+  /* ChatGPT Teal Brand Color replacing Indigo */
+  --color-indigo-400: #74AA9C;
+  --color-indigo-500: #74AA9C;
+  --color-indigo-555: #74AA9C;
+  --color-indigo-600: #5D8A7E;
+  --color-indigo-650: #39574F;
+  --color-indigo-700: #2C423C;
+  --color-indigo-800: #1F2E2A;
+  --color-indigo-900: #131C1A;
+  --color-indigo-950: #0D1412;
+}
+
+/* 3D Flashcard Flipping Utilities */
+.perspective {
+  perspective: 1000px;
+}
+
+.preserve-3d {
+  transform-style: preserve-3d;
+}
+
+.backface-hidden {
+  backface-visibility: hidden;
+}
+
+.rotate-y-180 {
+  transform: rotateY(180deg);
+}
