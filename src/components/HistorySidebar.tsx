@@ -50,6 +50,9 @@ export default function HistorySidebar({
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
   const [moveMenuGuideId, setMoveMenuGuideId] = useState<string | null>(null);
+  // Drag-and-drop state
+  const [dragOverFolderId, setDragOverFolderId] = useState<string | null>(null); // null = not hovering, "__unfiled__" = unfiled zone
+  const dragExpandTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const newFolderInputRef = useRef<HTMLInputElement>(null);
   const moveMenuRef = useRef<HTMLDivElement>(null);
@@ -141,6 +144,68 @@ export default function HistorySidebar({
     }
   };
 
+  // --- Drag-and-drop handlers ---
+  const handleGuideDragStart = (e: React.DragEvent, guideId: string) => {
+    e.dataTransfer.setData("text/plain", guideId);
+    e.dataTransfer.effectAllowed = "move";
+  };
+
+  const handleFolderDragOver = (e: React.DragEvent, folderId: string) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    if (dragOverFolderId !== folderId) {
+      setDragOverFolderId(folderId);
+      // Auto-expand collapsed folder after hovering 600ms
+      if (folderId !== "__unfiled__" && !expandedFolders.has(folderId)) {
+        if (dragExpandTimerRef.current) clearTimeout(dragExpandTimerRef.current);
+        dragExpandTimerRef.current = setTimeout(() => {
+          setExpandedFolders(prev => {
+            const next = new Set(prev);
+            next.add(folderId);
+            return next;
+          });
+        }, 600);
+      }
+    }
+  };
+
+  const handleFolderDragLeave = (e: React.DragEvent) => {
+    // Only clear if we're actually leaving the drop zone (not entering a child)
+    const related = e.relatedTarget as Node | null;
+    if (!e.currentTarget.contains(related)) {
+      setDragOverFolderId(null);
+      if (dragExpandTimerRef.current) {
+        clearTimeout(dragExpandTimerRef.current);
+        dragExpandTimerRef.current = null;
+      }
+    }
+  };
+
+  const handleFolderDrop = (e: React.DragEvent, folderId: string | null) => {
+    e.preventDefault();
+    setDragOverFolderId(null);
+    if (dragExpandTimerRef.current) {
+      clearTimeout(dragExpandTimerRef.current);
+      dragExpandTimerRef.current = null;
+    }
+    const guideId = e.dataTransfer.getData("text/plain");
+    if (guideId) {
+      // Don't move if already in this folder
+      const guide = history.find(g => g.id === guideId);
+      if (guide && (guide.folderId ?? null) !== folderId) {
+        onMoveGuide(guideId, folderId);
+      }
+    }
+  };
+
+  const handleDragEnd = () => {
+    setDragOverFolderId(null);
+    if (dragExpandTimerRef.current) {
+      clearTimeout(dragExpandTimerRef.current);
+      dragExpandTimerRef.current = null;
+    }
+  };
+
   // --- Categorize guides ---
   const guidesInFolder = (folderId: string) => history.filter(g => g.folderId === folderId);
   const unfiledGuides = history.filter(g => !g.folderId);
@@ -160,12 +225,15 @@ export default function HistorySidebar({
       <div
         key={guide.id}
         id={`history-item-${guide.id}`}
+        draggable={!isEditing}
+        onDragStart={(e) => handleGuideDragStart(e, guide.id)}
+        onDragEnd={handleDragEnd}
         onClick={() => !isEditing && onSelect(guide.id)}
         className={`group px-3 py-2.5 rounded-lg transition-all border ${
           isSelected
             ? "bg-slate-105 dark:bg-slate-800/80 border-slate-200 dark:border-slate-700 text-indigo-705 dark:text-indigo-400 font-medium"
             : "bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-850/60 border-slate-150 dark:border-slate-800 text-slate-655 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200"
-        } ${!isEditing ? "cursor-pointer" : "cursor-default"}`}
+        } ${!isEditing ? "cursor-grab active:cursor-grabbing" : "cursor-default"}`}
       >
         {isEditing ? (
           <form onSubmit={(e) => saveGuideRename(guide.id, e)} className="flex items-center gap-2">
@@ -326,12 +394,25 @@ export default function HistorySidebar({
     const colors = FOLDER_COLOR_MAP[folder.color];
     const FolderIcon = isExpanded ? FolderOpen : Folder;
 
+    const isDragOver = dragOverFolderId === folder.id;
+
     return (
-      <div key={folder.id} id={`folder-${folder.id}`} className="space-y-1">
+      <div
+        key={folder.id}
+        id={`folder-${folder.id}`}
+        className="space-y-1"
+        onDragOver={(e) => handleFolderDragOver(e, folder.id)}
+        onDragLeave={handleFolderDragLeave}
+        onDrop={(e) => handleFolderDrop(e, folder.id)}
+      >
         {/* Folder Header */}
         <div
           onClick={() => !isEditingThis && toggleFolder(folder.id)}
-          className={`group flex items-center justify-between px-2.5 py-2 rounded-lg transition-all cursor-pointer border ${colors.border} ${colors.bg} hover:opacity-90`}
+          className={`group flex items-center justify-between px-2.5 py-2 rounded-lg transition-all cursor-pointer border ${
+            isDragOver
+              ? "ring-2 ring-indigo-500 ring-offset-1 dark:ring-offset-slate-900 border-indigo-400 dark:border-indigo-500 scale-[1.02] shadow-md"
+              : `${colors.border} ${colors.bg} hover:opacity-90`
+          }`}
         >
           {isEditingThis ? (
             <form onSubmit={(e) => saveFolderRename(folder.id, e)} className="flex items-center gap-2 flex-1" onClick={(e) => e.stopPropagation()}>
@@ -469,13 +550,22 @@ export default function HistorySidebar({
           {/* Render folders first */}
           {folders.map(renderFolder)}
 
-          {/* Unfiled section — only shown when folders exist AND there are unfiled guides */}
-          {hasFolders && unfiledGuides.length > 0 && (
-            <div className="space-y-1.5 pt-2">
+          {/* Unfiled section — shown when folders exist AND (there are unfiled guides OR something is being dragged) */}
+          {hasFolders && (unfiledGuides.length > 0 || dragOverFolderId !== null) && (
+            <div
+              className={`space-y-1.5 pt-2 rounded-lg transition-all ${
+                dragOverFolderId === "__unfiled__"
+                  ? "ring-2 ring-indigo-500 ring-offset-1 dark:ring-offset-slate-900 bg-slate-50 dark:bg-slate-800/40 p-2"
+                  : ""
+              }`}
+              onDragOver={(e) => handleFolderDragOver(e, "__unfiled__")}
+              onDragLeave={handleFolderDragLeave}
+              onDrop={(e) => handleFolderDrop(e, null)}
+            >
               <div className="flex items-center gap-2 px-2">
                 <div className="flex-1 h-px bg-slate-150 dark:bg-slate-800" />
                 <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest shrink-0">
-                  Unfiled
+                  {dragOverFolderId === "__unfiled__" ? "Drop to unfile" : "Unfiled"}
                 </span>
                 <div className="flex-1 h-px bg-slate-150 dark:bg-slate-800" />
               </div>
